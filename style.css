@@ -177,6 +177,25 @@
   }
   .item-note{ font-size:.8rem; font-style:italic; color:var(--ink-muted); }
 
+  /* ---------- per-room subtabs (shopping list / inventory) ---------- */
+  .room-subtabs{ display:flex; gap:1rem; margin:.5rem 0 .3rem; border-bottom:1px solid var(--border-soft); }
+  .subtab-btn{
+    font-family:inherit; font-size:.8rem; font-weight:600; color:var(--ink-faint);
+    background:none; border:none; border-bottom:2px solid transparent; cursor:pointer;
+    padding:.35rem .05rem .45rem; margin-bottom:-1px;
+  }
+  .subtab-btn:hover{ color:var(--accent); }
+  .subtab-btn.active{ color:var(--accent-strong); border-bottom-color:var(--accent); }
+
+  .decision-btns{ display:flex; gap:.3rem; padding-top:.15rem; }
+  .decision-btn{
+    font-family:inherit; font-size:.72rem; font-weight:600; border-radius:6px; padding:.3rem .55rem;
+    cursor:pointer; border:1px solid var(--border); background:var(--surface); color:var(--ink-muted);
+  }
+  .decision-btn:hover{ border-color:var(--accent); color:var(--accent); }
+  .decision-btn.take.active{ background:var(--accent); border-color:var(--accent); color:var(--surface); }
+  .decision-btn.leave.active{ background:var(--danger); border-color:var(--danger); color:var(--surface); }
+
   /* ---------- rooms ---------- */
   .rooms{ display:flex; flex-direction:column; gap:1.1rem; }
 
