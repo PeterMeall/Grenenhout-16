@@ -158,6 +158,25 @@
   .plan-thumb .plan-label{ font-size:.75rem; color:var(--ink-muted); margin-top:.4rem; }
   .plan-thumb:hover .plan-label{ color:var(--accent); }
 
+  /* ---------- tab bar ---------- */
+  .tab-bar{
+    display:flex; gap:.4rem; margin-bottom:1.3rem; border-bottom:1px solid var(--border-soft);
+  }
+  .tab-btn{
+    font-family:inherit; font-size:.88rem; font-weight:600; color:var(--ink-muted);
+    background:none; border:none; border-bottom:2px solid transparent; cursor:pointer;
+    padding:.5rem .2rem .6rem; margin-bottom:-1px;
+  }
+  .tab-btn:hover{ color:var(--accent); }
+  .tab-btn.active{ color:var(--accent-strong); border-bottom-color:var(--accent); }
+
+  /* ---------- lists (notes / inventory) & budget ---------- */
+  .list-card{
+    background:var(--surface); border:1px solid var(--border-soft); border-radius:14px;
+    padding:1rem 1.05rem; margin-bottom:1.1rem;
+  }
+  .item-note{ font-size:.8rem; font-style:italic; color:var(--ink-muted); }
+
   /* ---------- rooms ---------- */
   .rooms{ display:flex; flex-direction:column; gap:1.1rem; }
 
