@@ -1,6 +1,7 @@
 import { firebaseConfig } from "./firebase-config.js";
 import { ROOM_PHOTOS, PLANS, HERO_PHOTO } from "./assets-data.js";
 import { SEED_ROOMS } from "./seed-data.js";
+import { SEED_INV_ROOMS } from "./seed-inventory-data.js";
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js";
 import {
@@ -26,6 +27,7 @@ import { connectAuthEmulator } from "https://www.gstatic.com/firebasejs/10.13.2/
   });
   var roomsCol = collection(db, "rooms");
   var listsCol = collection(db, "lists");
+  var invRoomsCol = collection(db, "invRooms");
   var expensesCol = collection(db, "expenses");
   var budgetRef = doc(db, "budget", "main");
 
@@ -48,7 +50,7 @@ import { connectAuthEmulator } from "https://www.gstatic.com/firebasejs/10.13.2/
   // room the user currently has an open add/edit form on, so a live
   // update from Arjen's phone can never wipe out what you're mid-typing.
 
-  var state = { rooms: [], lists: [], budgetTotal: null, expenses: [] };
+  var state = { rooms: [], lists: [], invRooms: [], budgetTotal: null, expenses: [] };
   var seeded = false;
   var budgetLoaded = false;
 
@@ -60,9 +62,10 @@ import { connectAuthEmulator } from "https://www.gstatic.com/firebasejs/10.13.2/
   var confirmDeleteRoom = null;
   var editingItem = null;
 
-  var roomViewMode = {}; // roomId -> "shopping" | "inventory", local to this device, not synced
-  var addingInventoryFor = null;
-  var editingInventoryItem = null; // {roomId, itemId}
+  var addingInvItemFor = null; // invRoomId
+  var addingInvRoom = false;
+  var confirmDeleteInvRoom = null;
+  var editingInvItem = null; // {invRoomId, itemId}
 
   var addingListItemFor = null;
   var addingList = false;
@@ -232,59 +235,7 @@ import { connectAuthEmulator } from "https://www.gstatic.com/firebasejs/10.13.2/
       '</div>';
   }
 
-  function inventoryItemHtml(room, item) {
-    var isEditing = editingInventoryItem && editingInventoryItem.roomId === room.id && editingInventoryItem.itemId === item.id;
-    if (isEditing) {
-      return '' +
-        '<li class="item editing">' +
-        '<div class="edit-form">' +
-        '<div class="row"><input type="text" class="edit-text" value="' + esc(item.text) + '" placeholder="Item"></div>' +
-        '<div class="buttons" style="justify-content:flex-end;">' +
-        '<button type="button" class="btn btn-ghost" data-action="cancel-edit-inventory-item">Cancel</button>' +
-        '<button type="button" class="btn btn-primary" data-action="save-edit-inventory-item" data-room="' + room.id + '" data-item="' + item.id + '">Save</button>' +
-        '</div>' +
-        '</div>' +
-        '</li>';
-    }
-    return '' +
-      '<li class="item">' +
-      '<div class="item-body">' +
-      '<div class="item-main"><span class="item-text">' + esc(item.text) + '</span></div>' +
-      '</div>' +
-      '<div class="decision-btns">' +
-      '<button type="button" class="decision-btn take' + (item.decision === "take" ? ' active' : '') + '" data-action="set-inventory-decision" data-room="' + room.id + '" data-item="' + item.id + '" data-decision="take">Take</button>' +
-      '<button type="button" class="decision-btn leave' + (item.decision === "leave" ? ' active' : '') + '" data-action="set-inventory-decision" data-room="' + room.id + '" data-item="' + item.id + '" data-decision="leave">Leave</button>' +
-      '</div>' +
-      '<div class="item-actions">' +
-      '<button type="button" class="icon-btn" data-action="edit-inventory-item" data-room="' + room.id + '" data-item="' + item.id + '" title="Edit">✎</button>' +
-      '<button type="button" class="icon-btn danger" data-action="delete-inventory-item" data-room="' + room.id + '" data-item="' + item.id + '" title="Remove">✕</button>' +
-      '</div>' +
-      '</li>';
-  }
-
-  function inventorySectionHtml(room) {
-    var inv = room.inventory || [];
-    var itemsHtml = inv.length
-      ? inv.map(function (it) { return inventoryItemHtml(room, it); }).join("")
-      : '<div class="empty-hint">Nothing added to the inventory yet.</div>';
-    var addRowHtml;
-    if (addingInventoryFor === room.id) {
-      addRowHtml = '' +
-        '<div class="edit-form">' +
-        '<div class="row"><input type="text" class="new-text" placeholder="Item, e.g. “Blue armchair”"></div>' +
-        '<div class="buttons" style="justify-content:flex-end;">' +
-        '<button type="button" class="btn btn-ghost" data-action="cancel-add-inventory-item">Cancel</button>' +
-        '<button type="button" class="btn btn-primary" data-action="confirm-add-inventory-item" data-room="' + room.id + '">Add</button>' +
-        '</div>' +
-        '</div>';
-    } else {
-      addRowHtml = '<button type="button" class="add-toggle" data-action="start-add-inventory-item" data-room="' + room.id + '">+ add item</button>';
-    }
-    return '<ul class="items">' + itemsHtml + '</ul><div class="add-row">' + addRowHtml + '</div>';
-  }
-
   function roomHtml(room) {
-    var mode = roomViewMode[room.id] || "shopping";
     var boughtCount = room.items.filter(function (i) { return i.bought; }).length;
     var tallyHtml = room.items.length ? ('<span class="room-tally">' + boughtCount + '/' + room.items.length + '</span>') : '';
     var itemsHtml = room.items.length
@@ -321,18 +272,8 @@ import { connectAuthEmulator } from "https://www.gstatic.com/firebasejs/10.13.2/
         '<button type="button" class="btn btn-danger" data-action="confirm-delete-room" data-room="' + room.id + '">Yes, delete</button>' +
         '</span>';
     } else {
-      roomHeadRight = '<span style="display:flex; align-items:center;">' + (mode === "shopping" ? tallyHtml : '') + (readOnly ? '' : '<button type="button" class="room-delete-btn" data-action="start-delete-room" data-room="' + room.id + '" title="Delete room">✕</button>') + '</span>';
+      roomHeadRight = '<span style="display:flex; align-items:center;">' + tallyHtml + (readOnly ? '' : '<button type="button" class="room-delete-btn" data-action="start-delete-room" data-room="' + room.id + '" title="Delete room">✕</button>') + '</span>';
     }
-
-    var subtabsHtml = '' +
-      '<div class="room-subtabs">' +
-      '<button type="button" class="subtab-btn' + (mode === "shopping" ? ' active' : '') + '" data-action="room-mode" data-room="' + room.id + '" data-mode="shopping">Shopping list</button>' +
-      '<button type="button" class="subtab-btn' + (mode === "inventory" ? ' active' : '') + '" data-action="room-mode" data-room="' + room.id + '" data-mode="inventory">Inventory</button>' +
-      '</div>';
-
-    var bodyHtml = mode === "inventory"
-      ? inventorySectionHtml(room)
-      : ('<ul class="items">' + itemsHtml + '</ul><div class="add-row">' + addRowHtml + '</div>');
 
     return '' +
       '<div class="room" data-room-id="' + room.id + '">' +
@@ -340,8 +281,8 @@ import { connectAuthEmulator } from "https://www.gstatic.com/firebasejs/10.13.2/
       '<div class="room-content">' +
       '<div class="room-head"><h2>' + esc(room.name) + '</h2>' + roomHeadRight + '</div>' +
       (room.note ? '<div class="room-note">' + esc(room.note) + '</div>' : '') +
-      subtabsHtml +
-      bodyHtml +
+      '<ul class="items">' + itemsHtml + '</ul>' +
+      '<div class="add-row">' + addRowHtml + '</div>' +
       '</div>' +
       '</div>';
   }
@@ -437,6 +378,99 @@ import { connectAuthEmulator } from "https://www.gstatic.com/firebasejs/10.13.2/
         '</div>' +
         '</div>'
         : '<button type="button" id="add-list-btn">+ add a list</button>') + '</div>';
+  }
+
+  // ---------- inventory (old house, room by room: take or leave) ----------
+
+  function invItemHtml(invRoom, item) {
+    var isEditing = editingInvItem && editingInvItem.invRoomId === invRoom.id && editingInvItem.itemId === item.id;
+    if (isEditing) {
+      return '' +
+        '<li class="item editing">' +
+        '<div class="edit-form">' +
+        '<div class="row"><input type="text" class="edit-text" value="' + esc(item.text) + '" placeholder="Item"></div>' +
+        '<div class="buttons" style="justify-content:flex-end;">' +
+        '<button type="button" class="btn btn-ghost" data-action="cancel-edit-inv-item">Cancel</button>' +
+        '<button type="button" class="btn btn-primary" data-action="save-edit-inv-item" data-invroom="' + invRoom.id + '" data-item="' + item.id + '">Save</button>' +
+        '</div>' +
+        '</div>' +
+        '</li>';
+    }
+    return '' +
+      '<li class="item">' +
+      '<div class="item-body">' +
+      '<div class="item-main"><span class="item-text">' + esc(item.text) + '</span></div>' +
+      '</div>' +
+      '<div class="decision-btns">' +
+      '<button type="button" class="decision-btn take' + (item.decision === "take" ? ' active' : '') + '" data-action="set-inv-decision" data-invroom="' + invRoom.id + '" data-item="' + item.id + '" data-decision="take">Take</button>' +
+      '<button type="button" class="decision-btn leave' + (item.decision === "leave" ? ' active' : '') + '" data-action="set-inv-decision" data-invroom="' + invRoom.id + '" data-item="' + item.id + '" data-decision="leave">Leave</button>' +
+      '</div>' +
+      '<div class="item-actions">' +
+      '<button type="button" class="icon-btn" data-action="edit-inv-item" data-invroom="' + invRoom.id + '" data-item="' + item.id + '" title="Edit">✎</button>' +
+      '<button type="button" class="icon-btn danger" data-action="delete-inv-item" data-invroom="' + invRoom.id + '" data-item="' + item.id + '" title="Remove">✕</button>' +
+      '</div>' +
+      '</li>';
+  }
+
+  function invRoomHtml(invRoom) {
+    var items = invRoom.items || [];
+    var takeCount = items.filter(function (i) { return i.decision === "take"; }).length;
+    var leaveCount = items.filter(function (i) { return i.decision === "leave"; }).length;
+    var tallyHtml = items.length ? ('<span class="room-tally">' + takeCount + ' take · ' + leaveCount + ' leave · ' + (items.length - takeCount - leaveCount) + ' undecided</span>') : '';
+    var itemsHtml = items.length
+      ? items.map(function (it) { return invItemHtml(invRoom, it); }).join("")
+      : '<div class="empty-hint">Nothing added yet.</div>';
+
+    var addRowHtml;
+    if (addingInvItemFor === invRoom.id) {
+      addRowHtml = '' +
+        '<div class="edit-form">' +
+        '<div class="row"><input type="text" class="new-text" placeholder="Item, e.g. “Bank + kussens”"></div>' +
+        '<div class="buttons" style="justify-content:flex-end;">' +
+        '<button type="button" class="btn btn-ghost" data-action="cancel-add-inv-item">Cancel</button>' +
+        '<button type="button" class="btn btn-primary" data-action="confirm-add-inv-item" data-invroom="' + invRoom.id + '">Add</button>' +
+        '</div>' +
+        '</div>';
+    } else {
+      addRowHtml = '<button type="button" class="add-toggle" data-action="start-add-inv-item" data-invroom="' + invRoom.id + '">+ add item</button>';
+    }
+
+    var headRight;
+    if (confirmDeleteInvRoom === invRoom.id) {
+      headRight = '' +
+        '<span class="room-delete-confirm">' +
+        '<span>Delete room?</span>' +
+        '<button type="button" class="btn btn-ghost" data-action="cancel-delete-inv-room">No</button>' +
+        '<button type="button" class="btn btn-danger" data-action="confirm-delete-inv-room" data-invroom="' + invRoom.id + '">Yes, delete</button>' +
+        '</span>';
+    } else {
+      headRight = '<button type="button" class="room-delete-btn" data-action="start-delete-inv-room" data-invroom="' + invRoom.id + '" title="Delete room">✕</button>';
+    }
+
+    return '' +
+      '<div class="list-card" data-invroom-id="' + invRoom.id + '">' +
+      '<div class="room-head"><h2>' + esc(invRoom.name) + '</h2>' + headRight + '</div>' +
+      (items.length ? '<div class="room-note">' + tallyHtml + '</div>' : '') +
+      '<ul class="items">' + itemsHtml + '</ul>' +
+      '<div class="add-row">' + addRowHtml + '</div>' +
+      '</div>';
+  }
+
+  function invRoomsSectionHtml() {
+    var roomsHtml = state.invRooms.length
+      ? state.invRooms.map(invRoomHtml).join("")
+      : '<div class="empty-hint" style="padding:1rem 0;">No rooms yet — add one below (e.g. “Living room”) and start marking what’s coming with you and what’s staying behind.</div>';
+    return '' +
+      roomsHtml +
+      '<div class="add-room-block">' + (addingInvRoom ?
+        '<div class="edit-form" style="max-width:26rem; margin:0 auto;">' +
+        '<div class="row"><input type="text" id="new-inv-room-name" placeholder="Room name, e.g. “Living room”"></div>' +
+        '<div class="buttons" style="justify-content:flex-end;">' +
+        '<button type="button" class="btn btn-ghost" id="cancel-inv-room-btn">Cancel</button>' +
+        '<button type="button" class="btn btn-primary" id="confirm-inv-room-btn">Add</button>' +
+        '</div>' +
+        '</div>'
+        : '<button type="button" id="add-inv-room-btn">+ add a room</button>') + '</div>';
   }
 
   // ---------- budget ----------
@@ -580,7 +614,7 @@ import { connectAuthEmulator } from "https://www.gstatic.com/firebasejs/10.13.2/
   }
 
   function tabsHtml() {
-    var tabs = [["rooms", "Rooms"], ["lists", "Lists"], ["budget", "Budget"]];
+    var tabs = [["rooms", "Rooms"], ["lists", "Lists"], ["inventory", "Inventory"], ["budget", "Budget"]];
     return '<div class="tab-bar">' + tabs.map(function (t) {
       return '<button type="button" class="tab-btn' + (activeTab === t[0] ? ' active' : '') + '" data-tab="' + t[0] + '">' + t[1] + '</button>';
     }).join("") + '</div>';
@@ -588,6 +622,7 @@ import { connectAuthEmulator } from "https://www.gstatic.com/firebasejs/10.13.2/
 
   function tabContentHtml() {
     if (activeTab === "lists") return listsSectionHtml();
+    if (activeTab === "inventory") return invRoomsSectionHtml();
     if (activeTab === "budget") return budgetSectionHtml();
     return '' +
       plansHtml() +
@@ -638,9 +673,13 @@ import { connectAuthEmulator } from "https://www.gstatic.com/firebasejs/10.13.2/
       var expInput = document.querySelector(".new-exp-desc");
       if (expInput) expInput.focus();
     }
-    if (addingInventoryFor) {
-      var invInput = document.querySelector('.room[data-room-id="' + addingInventoryFor + '"] .new-text');
+    if (addingInvItemFor) {
+      var invInput = document.querySelector('.list-card[data-invroom-id="' + addingInvItemFor + '"] .new-text');
       if (invInput) invInput.focus();
+    }
+    if (addingInvRoom) {
+      var invRoomInput = document.getElementById("new-inv-room-name");
+      if (invRoomInput) invRoomInput.focus();
     }
   }
 
@@ -662,46 +701,57 @@ import { connectAuthEmulator } from "https://www.gstatic.com/firebasejs/10.13.2/
   function findItem(room, id) { return room.items.find(function (i) { return i.id === id; }); }
   function findList(id) { return state.lists.find(function (l) { return l.id === id; }); }
   function findListItem(list, id) { return list.items.find(function (i) { return i.id === id; }); }
+  function findInvRoom(id) { return state.invRooms.find(function (r) { return r.id === id; }); }
+  function findInvItem(invRoom, id) { return (invRoom.items || []).find(function (i) { return i.id === id; }); }
 
   function isRoomBeingEdited(roomId) {
     return addingItemFor === roomId ||
       (editingItem && editingItem.roomId === roomId) ||
-      confirmDeleteRoom === roomId ||
-      addingInventoryFor === roomId ||
-      (editingInventoryItem && editingInventoryItem.roomId === roomId);
+      confirmDeleteRoom === roomId;
   }
   function isListBeingEdited(listId) {
     return addingListItemFor === listId ||
       (editingListItem && editingListItem.listId === listId) ||
       confirmDeleteList === listId;
   }
+  function isInvRoomBeingEdited(invRoomId) {
+    return addingInvItemFor === invRoomId ||
+      (editingInvItem && editingInvItem.invRoomId === invRoomId) ||
+      confirmDeleteInvRoom === invRoomId;
+  }
 
   var dirtyRooms = {}; // roomId -> true
   var dirtyLists = {}; // listId -> true
+  var dirtyInvRooms = {}; // invRoomId -> true
   var deletedRooms = {}; // roomId -> true, so a lagging snapshot can't resurrect it
   var deletedLists = {};
+  var deletedInvRooms = {};
   var flushTimer = null;
 
   function markDirty(kind, id) {
-    (kind === "list" ? dirtyLists : dirtyRooms)[id] = true;
+    var bucket = kind === "list" ? dirtyLists : (kind === "inv" ? dirtyInvRooms : dirtyRooms);
+    bucket[id] = true;
     setStatus("saving…");
     if (flushTimer) clearTimeout(flushTimer);
     flushTimer = setTimeout(flushDirty, 500);
   }
 
   function roomDocData(room) {
-    return { name: room.name, order: room.order, note: room.note || null, items: room.items, inventory: room.inventory || [] };
+    return { name: room.name, order: room.order, note: room.note || null, items: room.items };
   }
-  function findInventoryItem(room, id) { return (room.inventory || []).find(function (i) { return i.id === id; }); }
   function listDocData(list) {
     return { name: list.name, order: list.order, items: list.items };
+  }
+  function invRoomDocData(invRoom) {
+    return { name: invRoom.name, order: invRoom.order, items: invRoom.items };
   }
 
   function flushDirty() {
     flushTimer = null;
     var roomIds = Object.keys(dirtyRooms); dirtyRooms = {};
     var listIds = Object.keys(dirtyLists); dirtyLists = {};
-    if (!roomIds.length && !listIds.length) return;
+    var invRoomIds = Object.keys(dirtyInvRooms); dirtyInvRooms = {};
+    if (!roomIds.length && !listIds.length && !invRoomIds.length) return;
     var writes = [];
     roomIds.forEach(function (id) {
       var room = findRoom(id);
@@ -710,6 +760,10 @@ import { connectAuthEmulator } from "https://www.gstatic.com/firebasejs/10.13.2/
     listIds.forEach(function (id) {
       var list = findList(id);
       if (list) writes.push(setDoc(doc(listsCol, id), listDocData(list)));
+    });
+    invRoomIds.forEach(function (id) {
+      var invRoom = findInvRoom(id);
+      if (invRoom) writes.push(setDoc(doc(invRoomsCol, id), invRoomDocData(invRoom)));
     });
     Promise.all(writes).then(function () {
       setStatus("saved");
@@ -722,6 +776,7 @@ import { connectAuthEmulator } from "https://www.gstatic.com/firebasejs/10.13.2/
       setStatus(navigator.onLine ? "couldn't save — will retry" : "offline — will save once back online");
       roomIds.forEach(function (id) { dirtyRooms[id] = true; });
       listIds.forEach(function (id) { dirtyLists[id] = true; });
+      invRoomIds.forEach(function (id) { dirtyInvRooms[id] = true; });
       flushTimer = setTimeout(flushDirty, 3000);
     });
   }
@@ -783,7 +838,7 @@ import { connectAuthEmulator } from "https://www.gstatic.com/firebasejs/10.13.2/
     var name = input ? input.value.trim() : "";
     if (!name) { addingRoom = false; render(); return; }
     var maxOrder = state.rooms.reduce(function (m, r) { return Math.max(m, r.order || 0); }, -1);
-    var room = { id: makeId("room-"), name: name, note: null, items: [], inventory: [], order: maxOrder + 1 };
+    var room = { id: makeId("room-"), name: name, note: null, items: [], order: maxOrder + 1 };
     state.rooms.push(room);
     addingRoom = false;
     render(); markDirty("room", room.id);
@@ -807,47 +862,68 @@ import { connectAuthEmulator } from "https://www.gstatic.com/firebasejs/10.13.2/
     render(); markDirty("room", roomId);
   }
 
-  function setRoomMode(roomId, mode) { roomViewMode[roomId] = mode; render(); }
+  // ---------- inventory mutations ----------
 
-  // ---------- room inventory mutations ----------
-
-  function setInventoryDecision(roomId, itemId, decision) {
-    var room = findRoom(roomId); if (!room) return;
-    var item = findInventoryItem(room, itemId); if (!item) return;
+  function setInvDecision(invRoomId, itemId, decision) {
+    var invRoom = findInvRoom(invRoomId); if (!invRoom) return;
+    var item = findInvItem(invRoom, itemId); if (!item) return;
     item.decision = (item.decision === decision) ? null : decision;
-    render(); markDirty("room", roomId);
+    render(); markDirty("inv", invRoomId);
   }
 
-  function startAddInventoryItem(roomId) { addingInventoryFor = roomId; render(); }
-  function cancelAddInventoryItem() { addingInventoryFor = null; render(); }
-  function confirmAddInventoryItem(roomId) {
-    var scope = document.querySelector('.room[data-room-id="' + roomId + '"] .add-row');
+  function startAddInvItem(invRoomId) { addingInvItemFor = invRoomId; render(); }
+  function cancelAddInvItem() { addingInvItemFor = null; render(); }
+  function confirmAddInvItem(invRoomId) {
+    var scope = document.querySelector('.list-card[data-invroom-id="' + invRoomId + '"] .add-row');
     var text = scope.querySelector(".new-text").value.trim();
-    if (!text) { addingInventoryFor = null; render(); return; }
-    var room = findRoom(roomId);
-    if (!room.inventory) room.inventory = [];
-    room.inventory.push({ id: makeId("i"), text: text, decision: null });
-    addingInventoryFor = null;
-    render(); markDirty("room", roomId);
+    if (!text) { addingInvItemFor = null; render(); return; }
+    var invRoom = findInvRoom(invRoomId);
+    invRoom.items.push({ id: makeId("i"), text: text, decision: null });
+    addingInvItemFor = null;
+    render(); markDirty("inv", invRoomId);
   }
 
-  function startEditInventoryItem(roomId, itemId) { editingInventoryItem = { roomId: roomId, itemId: itemId }; render(); }
-  function cancelEditInventoryItem() { editingInventoryItem = null; render(); }
-  function saveEditInventoryItem(roomId, itemId) {
-    var scope = document.querySelector('.room[data-room-id="' + roomId + '"] .item.editing');
-    var room = findRoom(roomId);
-    var item = room ? findInventoryItem(room, itemId) : null;
-    if (!scope || !room || !item) { editingInventoryItem = null; render(); return; }
+  function startEditInvItem(invRoomId, itemId) { editingInvItem = { invRoomId: invRoomId, itemId: itemId }; render(); }
+  function cancelEditInvItem() { editingInvItem = null; render(); }
+  function saveEditInvItem(invRoomId, itemId) {
+    var scope = document.querySelector('.list-card[data-invroom-id="' + invRoomId + '"] .item.editing');
+    var invRoom = findInvRoom(invRoomId);
+    var item = invRoom ? findInvItem(invRoom, itemId) : null;
+    if (!scope || !invRoom || !item) { editingInvItem = null; render(); return; }
     var text = scope.querySelector(".edit-text").value.trim();
     if (text) item.text = text;
-    editingInventoryItem = null;
-    render(); markDirty("room", roomId);
+    editingInvItem = null;
+    render(); markDirty("inv", invRoomId);
   }
 
-  function deleteInventoryItem(roomId, itemId) {
-    var room = findRoom(roomId); if (!room) return;
-    room.inventory = (room.inventory || []).filter(function (i) { return i.id !== itemId; });
-    render(); markDirty("room", roomId);
+  function deleteInvItem(invRoomId, itemId) {
+    var invRoom = findInvRoom(invRoomId); if (!invRoom) return;
+    invRoom.items = invRoom.items.filter(function (i) { return i.id !== itemId; });
+    render(); markDirty("inv", invRoomId);
+  }
+
+  function startAddInvRoom() { addingInvRoom = true; render(); }
+  function cancelAddInvRoom() { addingInvRoom = false; render(); }
+  function confirmAddInvRoom() {
+    var input = document.getElementById("new-inv-room-name");
+    var name = input ? input.value.trim() : "";
+    if (!name) { addingInvRoom = false; render(); return; }
+    var maxOrder = state.invRooms.reduce(function (m, r) { return Math.max(m, r.order || 0); }, -1);
+    var invRoom = { id: makeId("invroom-"), name: name, items: [], order: maxOrder + 1 };
+    state.invRooms.push(invRoom);
+    addingInvRoom = false;
+    render(); markDirty("inv", invRoom.id);
+  }
+
+  function startDeleteInvRoom(invRoomId) { confirmDeleteInvRoom = invRoomId; render(); }
+  function cancelDeleteInvRoom() { confirmDeleteInvRoom = null; render(); }
+  function deleteInvRoom(invRoomId) {
+    state.invRooms = state.invRooms.filter(function (r) { return r.id !== invRoomId; });
+    confirmDeleteInvRoom = null;
+    delete dirtyInvRooms[invRoomId];
+    deletedInvRooms[invRoomId] = true;
+    render();
+    deleteDoc(doc(invRoomsCol, invRoomId)).catch(function (err) { console.error("delete failed", err); });
   }
 
   // ---------- list mutations ----------
@@ -1006,6 +1082,9 @@ import { connectAuthEmulator } from "https://www.gstatic.com/firebasejs/10.13.2/
     if (e.target.id === "add-expense-btn") { startAddExpense(); return; }
     if (e.target.id === "cancel-expense-btn") { cancelAddExpense(); return; }
     if (e.target.id === "confirm-expense-btn") { confirmAddExpense(); return; }
+    if (e.target.id === "add-inv-room-btn") { startAddInvRoom(); return; }
+    if (e.target.id === "cancel-inv-room-btn") { cancelAddInvRoom(); return; }
+    if (e.target.id === "confirm-inv-room-btn") { confirmAddInvRoom(); return; }
     var tabBtn = e.target.closest(".tab-btn");
     if (tabBtn) { activeTab = tabBtn.getAttribute("data-tab"); render(); return; }
     var t = e.target.closest("[data-action]");
@@ -1015,6 +1094,7 @@ import { connectAuthEmulator } from "https://www.gstatic.com/firebasejs/10.13.2/
     var itemId = t.getAttribute("data-item");
     var listId = t.getAttribute("data-list");
     var expenseId = t.getAttribute("data-expense");
+    var invRoomId = t.getAttribute("data-invroom");
     if (action === "toggle-list-item") { toggleListItem(listId, itemId); return; }
     if (action === "delete-list-item") { deleteListItem(listId, itemId); return; }
     if (action === "edit-list-item") { startEditListItem(listId, itemId); return; }
@@ -1032,15 +1112,17 @@ import { connectAuthEmulator } from "https://www.gstatic.com/firebasejs/10.13.2/
     if (action === "start-delete-expense") { startDeleteExpense(expenseId); return; }
     if (action === "cancel-delete-expense") { cancelDeleteExpense(); return; }
     if (action === "confirm-delete-expense") { deleteExpense(expenseId); return; }
-    if (action === "room-mode") { setRoomMode(roomId, t.getAttribute("data-mode")); return; }
-    if (action === "set-inventory-decision") { setInventoryDecision(roomId, itemId, t.getAttribute("data-decision")); return; }
-    if (action === "start-add-inventory-item") { startAddInventoryItem(roomId); return; }
-    if (action === "cancel-add-inventory-item") { cancelAddInventoryItem(); return; }
-    if (action === "confirm-add-inventory-item") { confirmAddInventoryItem(roomId); return; }
-    if (action === "edit-inventory-item") { startEditInventoryItem(roomId, itemId); return; }
-    if (action === "cancel-edit-inventory-item") { cancelEditInventoryItem(); return; }
-    if (action === "save-edit-inventory-item") { saveEditInventoryItem(roomId, itemId); return; }
-    if (action === "delete-inventory-item") { deleteInventoryItem(roomId, itemId); return; }
+    if (action === "set-inv-decision") { setInvDecision(invRoomId, itemId, t.getAttribute("data-decision")); return; }
+    if (action === "start-add-inv-item") { startAddInvItem(invRoomId); return; }
+    if (action === "cancel-add-inv-item") { cancelAddInvItem(); return; }
+    if (action === "confirm-add-inv-item") { confirmAddInvItem(invRoomId); return; }
+    if (action === "edit-inv-item") { startEditInvItem(invRoomId, itemId); return; }
+    if (action === "cancel-edit-inv-item") { cancelEditInvItem(); return; }
+    if (action === "save-edit-inv-item") { saveEditInvItem(invRoomId, itemId); return; }
+    if (action === "delete-inv-item") { deleteInvItem(invRoomId, itemId); return; }
+    if (action === "start-delete-inv-room") { startDeleteInvRoom(invRoomId); return; }
+    if (action === "cancel-delete-inv-room") { cancelDeleteInvRoom(); return; }
+    if (action === "confirm-delete-inv-room") { deleteInvRoom(invRoomId); return; }
     if (action === "delete") deleteItem(roomId, itemId);
     else if (action === "edit") startEdit(roomId, itemId);
     else if (action === "cancel-edit") cancelEdit();
@@ -1097,19 +1179,20 @@ import { connectAuthEmulator } from "https://www.gstatic.com/firebasejs/10.13.2/
 
   document.getElementById("wrap").addEventListener("keydown", function (e) {
     if (e.key !== "Enter") return;
-    if (e.target.matches(".new-text") && e.target.closest(".room") && addingInventoryFor) {
-      var invRoom = e.target.closest(".room");
-      e.preventDefault(); confirmAddInventoryItem(invRoom.getAttribute("data-room-id"));
-    } else if (e.target.matches(".edit-text") && e.target.closest(".room") && editingInventoryItem) {
-      e.preventDefault(); saveEditInventoryItem(editingInventoryItem.roomId, editingInventoryItem.itemId);
-    } else if (e.target.matches(".new-text, .new-link, .new-price")) {
+    if (e.target.matches(".new-text, .new-link, .new-price") && e.target.closest(".room")) {
       var room = e.target.closest(".room");
-      if (room) { e.preventDefault(); confirmAdd(room.getAttribute("data-room-id")); }
-    } else if (e.target.matches(".edit-text, .edit-link, .edit-price")) {
-      var editRoom = e.target.closest(".room");
-      if (editRoom && editingItem) { e.preventDefault(); saveEdit(editingItem.roomId, editingItem.itemId); }
+      e.preventDefault(); confirmAdd(room.getAttribute("data-room-id"));
+    } else if (e.target.matches(".edit-text, .edit-link, .edit-price") && e.target.closest(".room")) {
+      if (editingItem) { e.preventDefault(); saveEdit(editingItem.roomId, editingItem.itemId); }
     } else if (e.target.id === "new-room-name") {
       e.preventDefault(); confirmAddRoom();
+    } else if (e.target.matches(".new-text") && e.target.closest(".list-card[data-invroom-id]")) {
+      var invRoomCard = e.target.closest(".list-card");
+      e.preventDefault(); confirmAddInvItem(invRoomCard.getAttribute("data-invroom-id"));
+    } else if (e.target.matches(".edit-text") && e.target.closest(".list-card[data-invroom-id]")) {
+      if (editingInvItem) { e.preventDefault(); saveEditInvItem(editingInvItem.invRoomId, editingInvItem.itemId); }
+    } else if (e.target.id === "new-inv-room-name") {
+      e.preventDefault(); confirmAddInvRoom();
     } else if (e.target.matches(".new-text, .new-note") && e.target.closest(".list-card")) {
       var listCard = e.target.closest(".list-card");
       e.preventDefault(); confirmAddListItem(listCard.getAttribute("data-list-id"));
@@ -1150,6 +1233,7 @@ import { connectAuthEmulator } from "https://www.gstatic.com/firebasejs/10.13.2/
     setStatus("");
     attachRoomsListener();
     attachListsListener();
+    attachInvRoomsListener();
     attachExpensesListener();
     attachBudgetListener();
   });
@@ -1183,7 +1267,7 @@ import { connectAuthEmulator } from "https://www.gstatic.com/firebasejs/10.13.2/
         if (deletedRooms[roomId]) return; // our own delete is still propagating
         if (isRoomBeingEdited(roomId)) return; // don't clobber an open form
         var data = change.doc.data();
-        var room = { id: roomId, name: data.name, note: data.note || null, order: data.order || 0, items: data.items || [], inventory: data.inventory || [] };
+        var room = { id: roomId, name: data.name, note: data.note || null, order: data.order || 0, items: data.items || [] };
         var idx = state.rooms.findIndex(function (r) { return r.id === roomId; });
         if (idx === -1) state.rooms.push(room); else state.rooms[idx] = room;
       });
@@ -1199,6 +1283,43 @@ import { connectAuthEmulator } from "https://www.gstatic.com/firebasejs/10.13.2/
     Promise.all(SEED_ROOMS.map(function (room) {
       return setDoc(doc(roomsCol, room.id), roomDocData(room));
     })).catch(function (err) { console.error("seeding failed", err); });
+  }
+
+  var invSeeded = false;
+  function attachInvRoomsListener() {
+    onSnapshot(invRoomsCol, function (snapshot) {
+      if (snapshot.metadata.fromCache && snapshot.empty && !invSeeded) {
+        return; // wait for a real server answer before deciding whether to seed
+      }
+      if (snapshot.empty && !invSeeded && !snapshot.metadata.hasPendingWrites) {
+        invSeeded = true;
+        seedInventoryData();
+        return;
+      }
+      snapshot.docChanges().forEach(function (change) {
+        var invRoomId = change.doc.id;
+        if (change.type === "removed") {
+          if (!isInvRoomBeingEdited(invRoomId)) {
+            state.invRooms = state.invRooms.filter(function (r) { return r.id !== invRoomId; });
+          }
+          return;
+        }
+        if (deletedInvRooms[invRoomId]) return; // our own delete is still propagating
+        if (isInvRoomBeingEdited(invRoomId)) return; // don't clobber an open form
+        var data = change.doc.data();
+        var invRoom = { id: invRoomId, name: data.name, order: data.order || 0, items: data.items || [] };
+        var idx = state.invRooms.findIndex(function (r) { return r.id === invRoomId; });
+        if (idx === -1) state.invRooms.push(invRoom); else state.invRooms[idx] = invRoom;
+      });
+      state.invRooms.sort(function (a, b) { return (a.order || 0) - (b.order || 0); });
+      render();
+    }, function (err) { console.error("inventory listener error", err); });
+  }
+
+  function seedInventoryData() {
+    Promise.all(SEED_INV_ROOMS.map(function (invRoom) {
+      return setDoc(doc(invRoomsCol, invRoom.id), invRoomDocData(invRoom));
+    })).catch(function (err) { console.error("inventory seeding failed", err); });
   }
 
   function attachListsListener() {
